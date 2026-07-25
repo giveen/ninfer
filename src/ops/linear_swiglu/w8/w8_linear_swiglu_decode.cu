@@ -18,7 +18,7 @@ constexpr int kK            = 2048;
 constexpr int kGroupsPerRow = kK / 32;
 
 template <int RowsPerCta>
-__global__ __launch_bounds__(RowsPerCta * 32, 2) void w8_linear_swiglu_decode_pair_kernel(
+__global__ __launch_bounds__(RowsPerCta * 32, 1) void w8_linear_swiglu_decode_pair_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales, __nv_bfloat16* __restrict__ out) {
     constexpr int kValuesPerLane  = 8;
