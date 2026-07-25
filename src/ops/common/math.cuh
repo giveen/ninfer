@@ -10,17 +10,25 @@
 
 namespace ninfer::ops {
 
-__device__ __forceinline__ float silu(float x) { return x / (1.0f + expf(-x)); }
-
-__device__ __forceinline__ float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
-
-__device__ __forceinline__ float softplus(float x) { return (x > 20.0f) ? x : log1pf(expf(x)); }
-
 __device__ __forceinline__ float exp2_approx(float x) {
     float y;
     asm("ex2.approx.f32 %0, %1;" : "=f"(y) : "f"(x));
     return y;
 }
+
+__device__ __forceinline__ float silu(float x) { return x / (1.0f + expf(-x)); }
+
+// Faster silu using exp2.approx instead of expf.  Numerical parity should be
+// verified against the exact oracle because exp2.approx has ~2 ULP error.
+__device__ __forceinline__ float silu_fast(float x) {
+    constexpr float kLog2E = 1.4426950408889634074f;
+    const float e = exp2_approx(-x * kLog2E);
+    return x / (1.0f + e);
+}
+
+__device__ __forceinline__ float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
+
+__device__ __forceinline__ float softplus(float x) { return (x > 20.0f) ? x : log1pf(expf(x)); }
 
 __device__ __forceinline__ std::uint32_t pack_bf16x2(float lo, float hi) {
     std::uint32_t out;

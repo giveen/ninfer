@@ -234,15 +234,10 @@ __launch_bounds__(256) __global__
         sum += xv * xv;
     }
 
-    __shared__ float scratch[256];
-    scratch[threadIdx.x] = sum;
-    __syncthreads();
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) { scratch[threadIdx.x] += scratch[threadIdx.x + stride]; }
-        __syncthreads();
-    }
+    __shared__ float warp_sums[256 / kWarpSize];
+    const float block_sum = block_reduce_sum<256>(sum, warp_sums);
 
-    const float inv = rsqrtf(scratch[0] / static_cast<float>(d) + eps);
+    const float inv = rsqrtf(block_sum / static_cast<float>(d) + eps);
     for (std::int64_t i = threadIdx.x; i < static_cast<std::int64_t>(d); i += blockDim.x) {
         const std::int64_t index = base + i;
         const float xv           = __bfloat162float(x[index]);

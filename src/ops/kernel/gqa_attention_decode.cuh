@@ -150,32 +150,41 @@ __launch_bounds__(256) __global__
                                                     __nv_bfloat16* out) {
     static_assert(DChunk > 0 && DChunk <= kGqaHeadDim);
 
+    constexpr int kBlock = 256;
+    constexpr int kWarps = kBlock / kWarpSize;
+
     const int q_head  = static_cast<int>(blockIdx.x);
     const int d_start = static_cast<int>(blockIdx.y) * DChunk;
     const int token   = static_cast<int>(blockIdx.z);
     const int tid     = threadIdx.x;
+    const int lane    = tid & (kWarpSize - 1);
+    const int warp    = tid / kWarpSize;
     if (q_head >= Geometry::QHeads || token >= tokens) { return; }
     const int last_pos = positions[tokens - 1];
     const int window   = last_pos + 1;
     const int active_split_count =
         gqa_small_t_active_splits<Geometry, Int8>(window, split_count, tokens);
 
-    __shared__ float reduce[256];
+    __shared__ float warp_buf[kWarps];
+    __shared__ float head_m_shared;
+    __shared__ float head_l_shared;
 
     float local_m = -CUDART_INF_F;
-    for (int split = tid; split < active_split_count; split += blockDim.x) {
+    for (int split = tid; split < active_split_count; split += kBlock) {
         local_m = fmaxf(local_m,
                         partial_m[gqa_partial_stat_index<Geometry>(q_head, token, split, tokens)]);
     }
-    reduce[tid] = local_m;
+    float warp_m = warp_max(local_m);
+    if (lane == 0) { warp_buf[warp] = warp_m; }
     __syncthreads();
 
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) { reduce[tid] = fmaxf(reduce[tid], reduce[tid + stride]); }
-        __syncthreads();
+    if (warp == 0) {
+        float x = (lane < kWarps) ? warp_buf[lane] : -CUDART_INF_F;
+        float m = warp_max<kWarps>(x);
+        if (lane == 0) { head_m_shared = m; }
     }
-    const float head_m = reduce[0];
     __syncthreads();
+    const float head_m = head_m_shared;
 
     if (head_m == -CUDART_INF_F) {
         const int d = d_start + tid;
@@ -186,7 +195,7 @@ __launch_bounds__(256) __global__
     }
 
     float local_l = 0.0f;
-    for (int split = tid; split < active_split_count; split += blockDim.x) {
+    for (int split = tid; split < active_split_count; split += kBlock) {
         const float tile_l =
             partial_l[gqa_partial_stat_index<Geometry>(q_head, token, split, tokens)];
         if (tile_l > 0.0f) {
@@ -196,14 +205,17 @@ __launch_bounds__(256) __global__
                      head_m);
         }
     }
-    reduce[tid] = local_l;
+    float warp_l = warp_sum(local_l);
+    if (lane == 0) { warp_buf[warp] = warp_l; }
     __syncthreads();
 
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) { reduce[tid] += reduce[tid + stride]; }
-        __syncthreads();
+    if (warp == 0) {
+        float x = (lane < kWarps) ? warp_buf[lane] : 0.0f;
+        float l = warp_sum<kWarps>(x);
+        if (lane == 0) { head_l_shared = l; }
     }
-    const float head_l = reduce[0];
+    __syncthreads();
+    const float head_l = head_l_shared;
 
     const int d = d_start + tid;
     if (tid >= DChunk || d >= kGqaHeadDim) { return; }

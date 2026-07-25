@@ -227,27 +227,44 @@ __launch_bounds__(128, 2) __global__ void gqa_attention_small_t_tc_partial_bf16_
         const int qabs0 = (row0 < row_count) ? pos[token0] : -1;
         const int qabs1 = (row1 < row_count) ? pos[token1] : -1;
 
+        // Fast path: when the entire key tile is inside the causal window and both
+        // rows are valid, skip the per-element predicate checks.  This is the decode
+        // analog of the prefill kernel's full_score_tile path.
+        const bool full_score_tile = (row1 < row_count) && (k0 + Bc <= split_end) &&
+                                     (k0 + Bc - 1 <= qabs0) && (k0 + Bc - 1 <= qabs1);
         float bm0 = -CUDART_INF_F, bm1 = -CUDART_INF_F;
+        if (full_score_tile) {
 #pragma unroll
-        for (int nt = 0; nt < QKNt; ++nt) {
-            const int col0 = nt * 8 + 2 * lid;
-            const int col1 = col0 + 1;
-            const int key0 = k0 + col0;
-            const int key1 = col1 + k0;
-            score[nt][0]   = (row0 < row_count && key0 < split_end && key0 <= qabs0)
-                                 ? score[nt][0] * scale
-                                 : -CUDART_INF_F;
-            score[nt][1]   = (row0 < row_count && key1 < split_end && key1 <= qabs0)
-                                 ? score[nt][1] * scale
-                                 : -CUDART_INF_F;
-            score[nt][2]   = (row1 < row_count && key0 < split_end && key0 <= qabs1)
-                                 ? score[nt][2] * scale
-                                 : -CUDART_INF_F;
-            score[nt][3]   = (row1 < row_count && key1 < split_end && key1 <= qabs1)
-                                 ? score[nt][3] * scale
-                                 : -CUDART_INF_F;
-            bm0            = fmaxf(bm0, fmaxf(score[nt][0], score[nt][1]));
-            bm1            = fmaxf(bm1, fmaxf(score[nt][2], score[nt][3]));
+            for (int nt = 0; nt < QKNt; ++nt) {
+                score[nt][0] *= scale;
+                score[nt][1] *= scale;
+                score[nt][2] *= scale;
+                score[nt][3] *= scale;
+                bm0 = fmaxf(bm0, fmaxf(score[nt][0], score[nt][1]));
+                bm1 = fmaxf(bm1, fmaxf(score[nt][2], score[nt][3]));
+            }
+        } else {
+#pragma unroll
+            for (int nt = 0; nt < QKNt; ++nt) {
+                const int col0 = nt * 8 + 2 * lid;
+                const int col1 = col0 + 1;
+                const int key0 = k0 + col0;
+                const int key1 = col1 + k0;
+                score[nt][0]   = (row0 < row_count && key0 < split_end && key0 <= qabs0)
+                                     ? score[nt][0] * scale
+                                     : -CUDART_INF_F;
+                score[nt][1]   = (row0 < row_count && key1 < split_end && key1 <= qabs0)
+                                     ? score[nt][1] * scale
+                                     : -CUDART_INF_F;
+                score[nt][2]   = (row1 < row_count && key0 < split_end && key0 <= qabs1)
+                                     ? score[nt][2] * scale
+                                     : -CUDART_INF_F;
+                score[nt][3]   = (row1 < row_count && key1 < split_end && key1 <= qabs1)
+                                     ? score[nt][3] * scale
+                                     : -CUDART_INF_F;
+                bm0            = fmaxf(bm0, fmaxf(score[nt][0], score[nt][1]));
+                bm1            = fmaxf(bm1, fmaxf(score[nt][2], score[nt][3]));
+            }
         }
         bm0 = warp_max<4>(bm0, FullMask);
         bm1 = warp_max<4>(bm1, FullMask);
