@@ -77,8 +77,12 @@ __global__ __launch_bounds__(Cfg::THREADS, Cfg::MIN_BLOCKS) void w8_rowsplit_gem
     constexpr bool kSwiGlu          = Epilogue == W8Epilogue::SwiGluSplitHalf;
     constexpr int kOutputRowsPerCta = kSwiGlu ? BM / 2 : BM;
     static_assert(!kSwiGlu || (BM % 32) == 0);
-    static_assert(!kSwiGlu || Cfg::WARPS_M == 1 || Cfg::WARPS_M == 2,
-                  "SwiGLU supports warp-local or shared-memory row pairing");
+    // After the MmaR128C* SwiGLU removal (commit a22b352) every kSwiGlu=true
+    // route is WARPS_M == 1 (BM in {32,64}). The WARPS_M == 2 branch below is
+    // dead for the SwiGLU dispatcher and only retained for the non-swiglu
+    // linear op that doesn't instantiate via this code path anyway.
+    static_assert(!kSwiGlu || Cfg::WARPS_M == 1,
+                  "SwiGLU epilogue now assumes warp-local row pairing");
 
     __shared__ __align__(16) __nv_bfloat16 As[BM * BK];
     __shared__ __align__(16) __nv_bfloat16 Bs[Cfg::STAGES][BN * BK];
@@ -272,110 +276,54 @@ __global__ __launch_bounds__(Cfg::THREADS, Cfg::MIN_BLOCKS) void w8_rowsplit_gem
     }
 
     if constexpr (kSwiGlu) {
-        if constexpr (Cfg::WARPS_M == 1) {
-            static_assert((MT % 2) == 0);
-            constexpr int kGateMt = MT / 2;
+        // WARPS_M == 1 is the only path the SwiGLU dispatcher currently reaches.
+        // (See static_assert above.) The complement (r0,c0)+1 stays naturally BF16x2 aligned
+        // because c0 is computed from 2*lid, so we merge the two adjacent scalars into one
+        // 32-bit BF16x2 store. Same arithmetic, same rounding, half the store issue slots.
+        static_assert((MT % 2) == 0);
+        constexpr int kGateMt = MT / 2;
 #pragma unroll
-            for (int mi = 0; mi < kGateMt; ++mi) {
-                const int r0 = m0 + mi * 16 + gid;
-                const int r1 = r0 + 8;
+        for (int mi = 0; mi < kGateMt; ++mi) {
+            const int r0 = m0 + mi * 16 + gid;
+            const int r1 = r0 + 8;
 #pragma unroll
-                for (int ni = 0; ni < NT; ++ni) {
-                    const int c0          = n0 + wn * WN + ni * 8 + 2 * lid;
-                    const int c1          = c0 + 1;
-                    const float* gate_acc = acc[mi][ni];
-                    const float* up_acc   = acc[mi + kGateMt][ni];
-                    if constexpr (FullTiles) {
-                        *output_tile.at(r0, c0) =
-                            __float2bfloat16_rn(silu(gate_acc[0]) * up_acc[0]);
-                        *output_tile.at(r0, c1) =
-                            __float2bfloat16_rn(silu(gate_acc[1]) * up_acc[1]);
-                        *output_tile.at(r1, c0) =
-                            __float2bfloat16_rn(silu(gate_acc[2]) * up_acc[2]);
-                        *output_tile.at(r1, c1) =
-                            __float2bfloat16_rn(silu(gate_acc[3]) * up_acc[3]);
-                    } else {
-                        if (r0 < m / 2 && c0 < n) {
+            for (int ni = 0; ni < NT; ++ni) {
+                const int c0          = n0 + wn * WN + ni * 8 + 2 * lid;
+                const float* gate_acc = acc[mi][ni];
+                const float* up_acc   = acc[mi + kGateMt][ni];
+                if constexpr (FullTiles) {
+                    auto* r0_pair =
+                        reinterpret_cast<__nv_bfloat162*>(output_tile.at(r0, c0));
+                    auto* r1_pair =
+                        reinterpret_cast<__nv_bfloat162*>(output_tile.at(r1, c0));
+                    r0_pair[0] = __floats2bfloat162_rn(silu(gate_acc[0]) * up_acc[0],
+                                                       silu(gate_acc[1]) * up_acc[1]);
+                    r1_pair[0] = __floats2bfloat162_rn(silu(gate_acc[2]) * up_acc[2],
+                                                       silu(gate_acc[3]) * up_acc[3]);
+                } else {
+                    const bool ok0 = r0 < m / 2;
+                    const bool ok1 = r1 < m / 2;
+                    // The BF16x2 store writes 4 bytes covering (r?, c0) AND (r?, c0+1),
+                    // so we need c0+1 < n, not just c0 < n, before taking that path.
+                    // When only c0 < n we fall back to per-lane scalar stores.
+                    if (ok0) {
+                        if (c0 + 1 < n) {
+                            *reinterpret_cast<__nv_bfloat162*>(output_tile.at(r0, c0)) =
+                                __floats2bfloat162_rn(silu(gate_acc[0]) * up_acc[0],
+                                                      silu(gate_acc[1]) * up_acc[1]);
+                        } else if (c0 < n) {
                             *output_tile.at(r0, c0) =
                                 __float2bfloat16_rn(silu(gate_acc[0]) * up_acc[0]);
                         }
-                        if (r0 < m / 2 && c1 < n) {
-                            *output_tile.at(r0, c1) =
-                                __float2bfloat16_rn(silu(gate_acc[1]) * up_acc[1]);
-                        }
-                        if (r1 < m / 2 && c0 < n) {
+                    }
+                    if (ok1) {
+                        if (c0 + 1 < n) {
+                            *reinterpret_cast<__nv_bfloat162*>(output_tile.at(r1, c0)) =
+                                __floats2bfloat162_rn(silu(gate_acc[2]) * up_acc[2],
+                                                      silu(gate_acc[3]) * up_acc[3]);
+                        } else if (c0 < n) {
                             *output_tile.at(r1, c0) =
                                 __float2bfloat16_rn(silu(gate_acc[2]) * up_acc[2]);
-                        }
-                        if (r1 < m / 2 && c1 < n) {
-                            *output_tile.at(r1, c1) =
-                                __float2bfloat16_rn(silu(gate_acc[3]) * up_acc[3]);
-                        }
-                    }
-                }
-            }
-        } else {
-            static_assert(Cfg::WARPS_M == 2);
-            auto* up_shared = reinterpret_cast<float*>(Bs);
-            __syncthreads();
-            if (wm == 1) {
-#pragma unroll
-                for (int mi = 0; mi < MT; ++mi) {
-                    const int local_r0 = mi * 16 + gid;
-                    const int local_r1 = local_r0 + 8;
-#pragma unroll
-                    for (int ni = 0; ni < NT; ++ni) {
-                        const int local_c0                  = wn * WN + ni * 8 + 2 * lid;
-                        const int local_c1                  = local_c0 + 1;
-                        const float* up_acc                 = acc[mi][ni];
-                        up_shared[local_r0 * BN + local_c0] = up_acc[0];
-                        up_shared[local_r0 * BN + local_c1] = up_acc[1];
-                        up_shared[local_r1 * BN + local_c0] = up_acc[2];
-                        up_shared[local_r1 * BN + local_c1] = up_acc[3];
-                    }
-                }
-            }
-            __syncthreads();
-            if (wm == 0) {
-#pragma unroll
-                for (int mi = 0; mi < MT; ++mi) {
-                    const int local_r0 = mi * 16 + gid;
-                    const int local_r1 = local_r0 + 8;
-                    const int r0       = m0 + local_r0;
-                    const int r1       = m0 + local_r1;
-#pragma unroll
-                    for (int ni = 0; ni < NT; ++ni) {
-                        const int local_c0    = wn * WN + ni * 8 + 2 * lid;
-                        const int local_c1    = local_c0 + 1;
-                        const int c0          = n0 + local_c0;
-                        const int c1          = n0 + local_c1;
-                        const float* gate_acc = acc[mi][ni];
-                        const float up00      = up_shared[local_r0 * BN + local_c0];
-                        const float up01      = up_shared[local_r0 * BN + local_c1];
-                        const float up10      = up_shared[local_r1 * BN + local_c0];
-                        const float up11      = up_shared[local_r1 * BN + local_c1];
-                        if constexpr (FullTiles) {
-                            *output_tile.at(r0, c0) = __float2bfloat16_rn(silu(gate_acc[0]) * up00);
-                            *output_tile.at(r0, c1) = __float2bfloat16_rn(silu(gate_acc[1]) * up01);
-                            *output_tile.at(r1, c0) = __float2bfloat16_rn(silu(gate_acc[2]) * up10);
-                            *output_tile.at(r1, c1) = __float2bfloat16_rn(silu(gate_acc[3]) * up11);
-                        } else {
-                            if (r0 < m / 2 && c0 < n) {
-                                *output_tile.at(r0, c0) =
-                                    __float2bfloat16_rn(silu(gate_acc[0]) * up00);
-                            }
-                            if (r0 < m / 2 && c1 < n) {
-                                *output_tile.at(r0, c1) =
-                                    __float2bfloat16_rn(silu(gate_acc[1]) * up01);
-                            }
-                            if (r1 < m / 2 && c0 < n) {
-                                *output_tile.at(r1, c0) =
-                                    __float2bfloat16_rn(silu(gate_acc[2]) * up10);
-                            }
-                            if (r1 < m / 2 && c1 < n) {
-                                *output_tile.at(r1, c1) =
-                                    __float2bfloat16_rn(silu(gate_acc[3]) * up11);
-                            }
                         }
                     }
                 }
