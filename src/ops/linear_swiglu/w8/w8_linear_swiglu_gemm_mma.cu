@@ -43,13 +43,13 @@ void dispatch_variant(W8KernelVariant variant, const Tensor& x, const Weight& w,
 
 void w8_linear_swiglu_mma_r32_c32_launch(W8KernelVariant variant, const Tensor& x, const Weight& w,
                                          Tensor& out, cudaStream_t stream) {
-    using Schedule = W8RowSplitMmaGemmSchedule<32, 32, 32, 16, 4>;
+    using Schedule = W8RowSplitMmaGemmSchedule<32, 32, 32, 16, 3>;
     dispatch_variant<Schedule>(variant, x, w, out, stream);
 }
 
 void w8_linear_swiglu_mma_r32_c48_launch(W8KernelVariant variant, const Tensor& x, const Weight& w,
                                          Tensor& out, cudaStream_t stream) {
-    using Schedule = W8RowSplitMmaGemmSchedule<32, 48, 32, 16, 4>;
+    using Schedule = W8RowSplitMmaGemmSchedule<32, 48, 32, 16, 3>;
     dispatch_variant<Schedule>(variant, x, w, out, stream);
 }
 
