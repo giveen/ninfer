@@ -23,7 +23,7 @@ struct W8DecodeStoreEpilogue {
 template <std::int32_t Rows, std::int32_t RowsPerCta, class Output,
           class Epilogue = W8DecodeStoreEpilogue>
 __global__ __launch_bounds__(RowsPerCta * 32,
-                             2) void w8_k2048_decode_kernel(const __nv_bfloat16* __restrict__ x,
+                             1) void w8_k2048_decode_kernel(const __nv_bfloat16* __restrict__ x,
                                                             const std::uint8_t* __restrict__ codes,
                                                             const std::uint8_t* __restrict__ scales,
                                                             Output output, Epilogue epilogue = {}) {

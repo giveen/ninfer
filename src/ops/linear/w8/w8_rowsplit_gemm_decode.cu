@@ -20,7 +20,7 @@ constexpr int kGroups        = kHidden / 32;
 constexpr int kValuesPerLane = 8;
 
 template <int RowsPerCta>
-__global__ __launch_bounds__(RowsPerCta * 32, 2) void w8_rowsplit_k16384_decode_kernel(
+__global__ __launch_bounds__(RowsPerCta * 32, 1) void w8_rowsplit_k16384_decode_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales, __nv_bfloat16* __restrict__ out) {
     constexpr int kValuesPerPhase = 32 * kValuesPerLane;
