@@ -25,16 +25,16 @@ constexpr std::array<RouteSpec, 18> kRoutes{{
     {81, 96, W8LinearSwiGluScheduleId::MmaR32C96},
     {97, 128, W8LinearSwiGluScheduleId::MmaR64C64},
     {129, 192, W8LinearSwiGluScheduleId::MmaR32C64},
-    {193, 240, W8LinearSwiGluScheduleId::MmaR128C80},
+    {193, 240, W8LinearSwiGluScheduleId::MmaR64C128},
     {241, 255, W8LinearSwiGluScheduleId::MmaR32C128},
     {256, 256, W8LinearSwiGluScheduleId::MmaR64C128},
     {257, 264, W8LinearSwiGluScheduleId::MmaR64C64},
     {265, 288, W8LinearSwiGluScheduleId::MmaR64C96},
     {289, 320, W8LinearSwiGluScheduleId::MmaR64C64},
     {321, 384, W8LinearSwiGluScheduleId::MmaR64C128},
-    {385, 448, W8LinearSwiGluScheduleId::MmaR128C64},
+    {385, 448, W8LinearSwiGluScheduleId::MmaR64C128},
     {449, 512, W8LinearSwiGluScheduleId::MmaR64C128},
-    {513, 560, W8LinearSwiGluScheduleId::MmaR128C80},
+    {513, 560, W8LinearSwiGluScheduleId::MmaR64C128},
     {561, kAnyCols, W8LinearSwiGluScheduleId::MmaR64C128},
 }};
 
@@ -61,10 +61,8 @@ W8KernelVariant variant_for(W8LinearSwiGluScheduleId schedule, std::int32_t cols
         return W8KernelVariant::None;
     case W8LinearSwiGluScheduleId::MmaR32C64:
     case W8LinearSwiGluScheduleId::MmaR64C64:
-    case W8LinearSwiGluScheduleId::MmaR128C64:
         return (cols % 64) == 0 ? W8KernelVariant::Full : W8KernelVariant::Predicated;
     case W8LinearSwiGluScheduleId::MmaR32C80:
-    case W8LinearSwiGluScheduleId::MmaR128C80:
         return (cols % 80) == 0 ? W8KernelVariant::Full : W8KernelVariant::Predicated;
     case W8LinearSwiGluScheduleId::MmaR32C96:
     case W8LinearSwiGluScheduleId::MmaR64C96:
@@ -98,10 +96,6 @@ const char* w8_linear_swiglu_schedule_name(W8LinearSwiGluScheduleId schedule) no
         return "linear_swiglu.w8.mma.pair.r32.c96";
     case W8LinearSwiGluScheduleId::MmaR64C128:
         return "linear_swiglu.w8.mma.pair.r32.c128";
-    case W8LinearSwiGluScheduleId::MmaR128C64:
-        return "linear_swiglu.w8.mma.pair.r64.c64";
-    case W8LinearSwiGluScheduleId::MmaR128C80:
-        return "linear_swiglu.w8.mma.pair.r64.c80";
     }
     return "linear_swiglu.w8.unknown";
 }
@@ -162,12 +156,6 @@ void w8_linear_swiglu_execute_plan(const W8LinearSwiGluPlan& plan, const Tensor&
         return;
     case W8LinearSwiGluScheduleId::MmaR64C128:
         w8_linear_swiglu_mma_r64_c128_launch(plan.variant, x, w, out, stream);
-        return;
-    case W8LinearSwiGluScheduleId::MmaR128C64:
-        w8_linear_swiglu_mma_r128_c64_launch(plan.variant, x, w, out, stream);
-        return;
-    case W8LinearSwiGluScheduleId::MmaR128C80:
-        w8_linear_swiglu_mma_r128_c80_launch(plan.variant, x, w, out, stream);
         return;
     }
     throw std::logic_error("W8 LinearSwiGLU: unknown schedule");

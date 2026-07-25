@@ -39,9 +39,5 @@ void w8_linear_swiglu_mma_r64_c96_launch(W8KernelVariant variant, const Tensor& 
                                          Tensor& out, cudaStream_t stream);
 void w8_linear_swiglu_mma_r64_c128_launch(W8KernelVariant variant, const Tensor& x, const Weight& w,
                                           Tensor& out, cudaStream_t stream);
-void w8_linear_swiglu_mma_r128_c64_launch(W8KernelVariant variant, const Tensor& x, const Weight& w,
-                                          Tensor& out, cudaStream_t stream);
-void w8_linear_swiglu_mma_r128_c80_launch(W8KernelVariant variant, const Tensor& x, const Weight& w,
-                                          Tensor& out, cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

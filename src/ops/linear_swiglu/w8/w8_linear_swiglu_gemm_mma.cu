@@ -113,16 +113,4 @@ void w8_linear_swiglu_mma_r64_c128_launch(W8KernelVariant variant, const Tensor&
     dispatch_variant<Schedule>(variant, x, w, out, stream);
 }
 
-void w8_linear_swiglu_mma_r128_c64_launch(W8KernelVariant variant, const Tensor& x, const Weight& w,
-                                          Tensor& out, cudaStream_t stream) {
-    using Schedule = W8RowSplitMmaGemmSchedule<128, 64, 64, 16, 2>;
-    dispatch_variant<Schedule>(variant, x, w, out, stream);
-}
-
-void w8_linear_swiglu_mma_r128_c80_launch(W8KernelVariant variant, const Tensor& x, const Weight& w,
-                                          Tensor& out, cudaStream_t stream) {
-    using Schedule = W8RowSplitMmaGemmSchedule<128, 80, 64, 16, 2>;
-    dispatch_variant<Schedule>(variant, x, w, out, stream);
-}
-
 } // namespace ninfer::ops::detail
