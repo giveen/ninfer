@@ -216,6 +216,7 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
     engine_options.max_context      = options.context;
     engine_options.kv_cache         = options.kv;
     engine_options.startup_observer = startup_log.observer();
+    const std::uint32_t prefill_chunk_tokens = engine_options.prefill_chunk;
     ninfer::Engine engine(std::move(engine_options));
     const ninfer::LoadSummary load = engine.load_summary();
     startup_log.engine_ready(load);
@@ -385,7 +386,7 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
           {"device", options.device},
           {"context_tokens", options.context},
           {"stride_tokens", options.stride},
-          {"prefill_chunk_tokens", 1024},
+          {"prefill_chunk_tokens", prefill_chunk_tokens},
           {"score_tile_tokens", 1024},
           {"kv_dtype", kv_name(options.kv)}}},
         {"timing",
